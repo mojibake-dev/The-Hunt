@@ -174,7 +174,3 @@ This approach can theoretically discover up to 37,000+ results (vs GitHub's 1000
 ## Contributing
 
 Contributions welcome! Please ensure any changes maintain the ethical focus and improve the tool's educational value.
-
-## License
-
-[Add your
