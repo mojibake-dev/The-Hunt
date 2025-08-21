@@ -10,15 +10,13 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Set
+from datetime import datetime
+from typing import Dict, List
 
 import requests
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
-from rich.text import Text
 
 console = Console()
 

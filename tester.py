@@ -1,14 +1,11 @@
-import sys
 import os
 from openai import OpenAI
 import time
-import json
 import argparse
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn
-from rich.text import Text
 
 console = Console()
 
@@ -187,7 +184,7 @@ def check_api_key(api_key: str) -> tuple[bool, str]:
             return False, f"INVALID_UNKNOWN: {error_str[:200]}"
 
 
-def test_keys_from_file(file_path, start_index=0, limit=None, delay=1):
+def test_keys_from_file(file_path, start_index=0, limit=None, delay=1, output_dir="output/"):
     """
     Test multiple API keys from a file.
     
@@ -196,6 +193,7 @@ def test_keys_from_file(file_path, start_index=0, limit=None, delay=1):
         start_index: Index to start testing from (0-based)
         limit: Maximum number of keys to test
         delay: Delay in seconds between API calls
+        output_dir: Directory to save output files
     
     Returns:
         Tuple of (valid_keys_with_responses, total_tested)
@@ -205,13 +203,17 @@ def test_keys_from_file(file_path, start_index=0, limit=None, delay=1):
         console.print(f"[red]Error: File not found: {file_path}[/red]")
         return [], 0
     
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
     # Read all keys from file
     with open(file_path, 'r') as f:
         all_keys = [line.strip() for line in f if line.strip()]
     
     file_info = {
         "File path": file_path,
-        "Total keys found": str(len(all_keys))
+        "Total keys found": str(len(all_keys)),
+        "Output directory": output_dir
     }
     print_info_panel("File Information", file_info)
     
@@ -267,6 +269,8 @@ if __name__ == "__main__":
                         help="Delay in seconds between API calls")
     parser.add_argument("--key", "-k", 
                         help="Test a single key instead of reading from a file")
+    parser.add_argument("--output", "-o", default="output/",
+                        help="Output directory for results (default: output/)")
     
     args = parser.parse_args()
     
@@ -294,7 +298,8 @@ if __name__ == "__main__":
             args.file, 
             start_index=args.start, 
             limit=args.limit, 
-            delay=args.delay
+            delay=args.delay,
+            output_dir=args.output
         )
         
         # Report results
@@ -308,18 +313,17 @@ if __name__ == "__main__":
         print_info_panel("Summary", results_summary)
         
         if valid_keys_with_responses:
-            # Create output directory
+            # Create timestamp for files
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-            output_dir = os.path.dirname(args.file) or '.'
             
             # Save valid keys to raw file (one per line)
-            valid_keys_file = os.path.join(output_dir, f"valid_keys_{timestamp}.txt")
+            valid_keys_file = os.path.join(args.output, f"valid_keys_{timestamp}.txt")
             with open(valid_keys_file, 'w') as f:
                 for key, _ in valid_keys_with_responses:
                     f.write(f"{key}\n")
             
             # Save keys with responses to detailed file
-            detailed_file = os.path.join(output_dir, f"valid_keys_detailed_{timestamp}.txt")
+            detailed_file = os.path.join(args.output, f"valid_keys_detailed_{timestamp}.txt")
             with open(detailed_file, 'w') as f:
                 for key, response in valid_keys_with_responses:
                     f.write(f"Key: {key}\n")
