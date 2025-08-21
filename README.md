@@ -1,6 +1,6 @@
 # KeyTheft - OpenAI API Key Discovery & Validation
 
-A comprehensive toolkit for discovering and validating OpenAI API keys on GitHub using advanced search sharding techniques to overcome GitHub's API limitations.
+A quick and dirty Proof of Concept for discovering and validating OpenAI API keys on GitHub using search sharding techniques to overcome GitHub's API limitations.
 
 ## Overview
 
