@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Simple GitHub API search for OpenAI API keys with sharding to overcome 1000 result limit
-Based on: curl -H "Authorization: Bearer KEY" -H "Accept: application/vnd.github.text-match+json" "https://api.github.com/search/code?q=sk-proj-+language:python&per_page=1000&page=1"
-"""
 
 import argparse
 import json
