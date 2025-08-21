@@ -2,12 +2,18 @@ import os
 from openai import OpenAI
 import time
 import argparse
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn
+from rich.live import Live
+from rich.table import Table
 
 console = Console()
+console_lock = threading.Lock()  # Thread-safe console output
 
 def print_section(title: str):
     """Print a section header using rich"""
@@ -43,7 +49,7 @@ def print_info_panel(title: str, content: dict):
             console.print(line)
         console.print("=" * (len(title) + 8))
 
-def check_api_key(api_key: str) -> tuple[bool, str]:
+def check_api_key(api_key: str, thread_id: int = 0) -> tuple[bool, str]:
     """Check whether the provided OpenAI API key is valid by making a small chat completion.
 
     The function accepts keys with or without a leading "Bearer " prefix.
@@ -72,7 +78,8 @@ def check_api_key(api_key: str) -> tuple[bool, str]:
             except Exception:
                 content = str(resp)
 
-        console.print(f"[green]Key {api_key[:8]}...{api_key[-5:]} is VALID (SUCCESS)[/green]")
+        with console_lock:
+            console.print(f"[green][Thread {thread_id}] Key {api_key[:8]}...{api_key[-5:]} is VALID (SUCCESS)[/green]")
         response_message = f"SUCCESS: {content}"
         return True, response_message
         
@@ -102,7 +109,8 @@ def check_api_key(api_key: str) -> tuple[bool, str]:
             if ("Incorrect API key provided" in error_str or 
                 "Invalid API key provided" in error_str or
                 "You didn't provide an API key" in error_str):
-                console.print(f"[red]Key {api_key[:8]}...{api_key[-5:]} is INVALID (Bad key)[/red]")
+                with console_lock:
+                    console.print(f"[red][Thread {thread_id}] Key {api_key[:8]}...{api_key[-5:]} is INVALID (Bad key)[/red]")
                 return False, f"INVALID_KEY: {error_str[:200]}"
             else:
                 # Other 401 errors might be valid keys with auth issues
@@ -175,28 +183,106 @@ def check_api_key(api_key: str) -> tuple[bool, str]:
         
         # If we determined an error type, the key is considered valid (just has other issues)
         if error_type:
-            console.print(f"[green]Key {api_key[:8]}...{api_key[-5:]} is VALID ({error_type})[/green]")
+            with console_lock:
+                console.print(f"[green][Thread {thread_id}] Key {api_key[:8]}...{api_key[-5:]} is VALID ({error_type})[/green]")
             response_message = f"VALID_WITH_ERROR: {error_type} - {error_str[:150]}"
             return True, response_message
         else:
             # Fallback for truly unknown errors - assume invalid to be safe
-            console.print(f"[red]Key {api_key[:8]}...{api_key[-5:]} is INVALID (Unknown error)[/red]")
+            with console_lock:
+                console.print(f"[red][Thread {thread_id}] Key {api_key[:8]}...{api_key[-5:]} is INVALID (Unknown error)[/red]")
             return False, f"INVALID_UNKNOWN: {error_str[:200]}"
 
+def test_key_wrapper(args_tuple):
+    """Wrapper function for parallel execution"""
+    key, thread_id = args_tuple
+    return key, check_api_key(key, thread_id)
 
-def test_keys_from_file(file_path, start_index=0, limit=None, delay=1, output_dir="output/"):
+def test_keys_from_file_parallel(file_path, start_index=0, limit=None, max_workers=10, output_dir="output/"):
     """
-    Test multiple API keys from a file.
+    Test multiple API keys from a file using parallel processing.
     
     Args:
         file_path: Path to the file containing API keys (one per line)
         start_index: Index to start testing from (0-based)
         limit: Maximum number of keys to test
-        delay: Delay in seconds between API calls
+        max_workers: Maximum number of parallel threads (default: 10)
         output_dir: Directory to save output files
     
     Returns:
         Tuple of (valid_keys_with_responses, total_tested)
+    """
+    # Check if file exists
+    if not os.path.exists(file_path):
+        console.print(f"[red]Error: File not found: {file_path}[/red]")
+        return [], 0
+    
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Read all keys from file
+    with open(file_path, 'r') as f:
+        all_keys = [line.strip() for line in f if line.strip()]
+    
+    file_info = {
+        "File path": file_path,
+        "Total keys found": str(len(all_keys)),
+        "Output directory": output_dir
+    }
+    print_info_panel("File Information", file_info)
+    
+    # Determine which keys to test based on start_index and limit
+    end_index = len(all_keys) if limit is None else min(start_index + limit, len(all_keys))
+    keys_to_test = all_keys[start_index:end_index]
+    
+    test_config = {
+        "Keys to test": str(len(keys_to_test)),
+        "Starting from index": str(start_index),
+        "Parallel workers": str(max_workers)
+    }
+    print_info_panel("Test Configuration", test_config)
+    
+    valid_keys_with_responses = []
+    completed_count = 0
+    
+    # Create thread pool and submit tasks
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task("Testing API keys...", total=len(keys_to_test))
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_key = {
+                executor.submit(test_key_wrapper, (key, i % max_workers)): key 
+                for i, key in enumerate(keys_to_test)
+            }
+            
+            # Process completed tasks as they finish
+            for future in as_completed(future_to_key):
+                original_key = future_to_key[future]
+                try:
+                    key, (is_valid, response) = future.result()
+                    if is_valid:
+                        valid_keys_with_responses.append((key, response))
+                    
+                    completed_count += 1
+                    progress.update(task, advance=1, description=f"Completed {completed_count}/{len(keys_to_test)} keys")
+                    
+                except Exception as exc:
+                    with console_lock:
+                        console.print(f'[red]Key {original_key[:8]}...{original_key[-5:]} generated an exception: {exc}[/red]')
+                    completed_count += 1
+                    progress.advance(task, 1)
+    
+    return valid_keys_with_responses, len(keys_to_test)
+
+def test_keys_from_file_sequential(file_path, start_index=0, limit=None, delay=1, output_dir="output/"):
+    """
+    Original sequential testing function (kept for compatibility)
     """
     # Check if file exists
     if not os.path.exists(file_path):
@@ -266,11 +352,15 @@ if __name__ == "__main__":
     parser.add_argument("--limit", "-l", type=int, 
                         help="Maximum number of keys to test")
     parser.add_argument("--delay", "-d", type=float, default=1.0, 
-                        help="Delay in seconds between API calls")
+                        help="Delay in seconds between API calls (sequential mode only)")
     parser.add_argument("--key", "-k", 
                         help="Test a single key instead of reading from a file")
     parser.add_argument("--output", "-o", default="output/",
                         help="Output directory for results (default: output/)")
+    parser.add_argument("--workers", "-w", type=int, default=10,
+                        help="Number of parallel workers (default: 10)")
+    parser.add_argument("--sequential", action="store_true",
+                        help="Use sequential processing instead of parallel (useful for rate limit testing)")
     
     args = parser.parse_args()
     
@@ -293,14 +383,25 @@ if __name__ == "__main__":
         print_info_panel("Test Result", result_info)
         
     else:
-        # Test keys from file
-        valid_keys_with_responses, total_tested = test_keys_from_file(
-            args.file, 
-            start_index=args.start, 
-            limit=args.limit, 
-            delay=args.delay,
-            output_dir=args.output
-        )
+        # Choose testing method
+        if args.sequential:
+            console.print("[yellow]Using sequential mode[/yellow]")
+            valid_keys_with_responses, total_tested = test_keys_from_file_sequential(
+                args.file, 
+                start_index=args.start, 
+                limit=args.limit, 
+                delay=args.delay,
+                output_dir=args.output
+            )
+        else:
+            console.print(f"[blue]Using parallel mode with {args.workers} workers[/blue]")
+            valid_keys_with_responses, total_tested = test_keys_from_file_parallel(
+                args.file, 
+                start_index=args.start, 
+                limit=args.limit, 
+                max_workers=args.workers,
+                output_dir=args.output
+            )
         
         # Report results
         print_section("TEST RESULTS")
